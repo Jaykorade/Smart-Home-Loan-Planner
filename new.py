@@ -42,4 +42,64 @@ for i in range(1, months + 1):
 
     year = (i - 1) // 12
     adjusted_salary = monthly_salary * ((1 + inflation_rate / 100) ** year)
-    sip = (sip_perce_
+    sip = (sip_percent / 100) * adjusted_salary
+    max_emi = (emi_limit_percent / 100) * adjusted_salary
+    emi = 0
+    interest_paid = 0
+    principal_paid = 0
+
+    if principal > 0:
+        emi = npf.pmt(monthly_interest, months - i + 1, -principal)
+        emi = min(emi, max_emi)  # Clamp EMI to max EMI based on income
+        interest_paid = principal * monthly_interest
+        principal_paid = emi - interest_paid
+        principal -= principal_paid
+
+    budget_left = adjusted_salary - expenses - sip - emi
+    prepayment = 0
+    if budget_left > 5000 and principal > 0:
+        prepayment = 0.8 * budget_left
+        prepayment_total += prepayment
+        principal -= prepayment
+
+    principal = max(principal, 0)
+
+    data.append({
+        "Month": i,
+        "Adjusted Salary": round(adjusted_salary),
+        "SIP": round(sip),
+        "EMI": round(emi),
+        "Interest Paid": round(interest_paid),
+        "Principal Paid": round(principal_paid),
+        "Prepayment": round(prepayment),
+        "Remaining Principal": round(principal)
+    })
+
+    if principal <= 0:
+        break
+
+df = pd.DataFrame(data)
+
+# Output section
+st.subheader("📊 Loan Amortization Schedule")
+st.dataframe(df, use_container_width=True)
+
+st.subheader("📈 Summary Stats")
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Interest Paid", f"₹{df['Interest Paid'].sum():,.0f}")
+col2.metric("Total Prepayments", f"₹{prepayment_total:,.0f}")
+col3.metric("Loan Closed In", f"{len(df)} months")
+
+st.subheader("📉 Trends Over Time")
+st.line_chart(df[["EMI", "Interest Paid", "Prepayment"]])
+
+# File download
+csv = df.to_csv(index=False)
+excel = io.BytesIO()
+with pd.ExcelWriter(excel, engine='xlsxwriter') as writer:
+    df.to_excel(writer, index=False, sheet_name='Schedule')
+excel.seek(0)
+
+st.subheader("📥 Download")
+st.download_button("Download CSV", csv, "loan_schedule.csv", "text/csv")
+st.download_button("Download Excel", excel.read(), "loan_schedule.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
