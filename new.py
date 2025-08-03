@@ -1,105 +1,134 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
 import numpy_financial as npf
+import io
 
 st.set_page_config(page_title="Smart Home Loan Planner", layout="wide")
-st.title("🏠 Smart Home Loan + Parallel Funding Planner")
+st.title("🏠 Smart Home Loan & Salary Planner with Parallel Funding & Smart Prepayment")
 
-st.sidebar.header("User Inputs")
+# Sidebar: User Inputs
+st.sidebar.header("Basic Details")
+monthly_salary = st.sidebar.number_input("Monthly Salary (₹)", value=150000)
+expenses = st.sidebar.number_input("Fixed Monthly Expenses (₹)", value=30000)
+sip_percent = st.sidebar.slider("SIP % of Salary", 0, 50, 20)
+emergency_percent = st.sidebar.slider("Emergency Buffer % of Salary", 0, 50, 10)
 
-# Loan slab disbursement inputs
-loan_slabs = st.sidebar.text_area("Loan Slabs (comma-separated, ₹)", "750000,1500000,1500000,1200000,1200000,1200000")
-slab_months = st.sidebar.text_area("Slab Disbursement Months (comma-separated)", "1,2,6,12,18,24")
+loan_tenure = st.sidebar.number_input("Loan Tenure (Years)", value=20)
+interest_rate = st.sidebar.number_input("Loan Interest Rate (% Annual)", value=7.5)
+inflation = st.sidebar.slider("Inflation Rate %", 0.0, 10.0, 6.0)
 
-loan_slabs = [float(x.strip()) for x in loan_slabs.split(",")]
-slab_months = [int(x.strip()) for x in slab_months.split(",")]
+# Prepayment or reinvest surplus
+surplus_strategy = st.sidebar.radio("What to do with surplus?", ["Prepay Loan", "Reinvest Surplus"])
+
+# Dynamic Slab Entry
+st.sidebar.markdown("## 🧮 Slabwise Loan Disbursement")
+num_slabs = st.sidebar.number_input("Number of Slabs", min_value=1, max_value=12, value=6)
+loan_slabs = []
+slab_months = []
+for i in range(num_slabs):
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        amt = st.number_input(f"Slab {i+1} Amount (₹)", key=f"amt_{i}", value=1200000)
+    with col2:
+        mon = st.number_input(f"Month {i+1}", key=f"mon_{i}", min_value=1, value=(i + 1) * 3)
+    loan_slabs.append(amt)
+    slab_months.append(mon)
+
+# Derived
+total_loan = sum(loan_slabs)
+months = loan_tenure * 12
+monthly_interest = interest_rate / 12 / 100
 disbursement_dict = dict(zip(slab_months, loan_slabs))
 
-# Inputs
-tenure_years = st.sidebar.number_input("Loan Tenure (Years)", value=20)
-months = tenure_years * 12
-interest_rate = st.sidebar.number_input("Interest Rate (Annual %)", value=7.5)
-monthly_salary = st.sidebar.number_input("Initial Monthly Salary (₹)", value=150000)
-inflation_rate = st.sidebar.number_input("Annual Inflation %", value=6.0)
-expenses = st.sidebar.number_input("Monthly Fixed Expenses (₹)", value=30000)
-sip_percent = st.sidebar.slider("SIP % of Salary", 0, 50, 20)
-emi_limit_percent = st.sidebar.slider("Max EMI % of Salary", 0, 100, 50)
-
-# Derived values
-monthly_interest = interest_rate / 12 / 100
+# Init vars
 principal = 0
-prepayment_total = 0
-disbursed_amount = 0
 data = []
+prepayment_total = 0
+emergency_fund = 0
 
-for i in range(1, months + 1):
-    # Handle slab disbursement
-    if i in disbursement_dict:
-        principal += disbursement_dict[i]
-        disbursed_amount += disbursement_dict[i]
+# Simulation
+for month in range(1, months + 1):
+    # Disbursement
+    if month in disbursement_dict:
+        principal += disbursement_dict[month]
 
-    year = (i - 1) // 12
-    adjusted_salary = monthly_salary * ((1 + inflation_rate / 100) ** year)
-    sip = (sip_percent / 100) * adjusted_salary
-    max_emi = (emi_limit_percent / 100) * adjusted_salary
-    emi = 0
-    interest_paid = 0
-    principal_paid = 0
+    # Adjusted salary
+    year = (month - 1) // 12
+    adj_salary = monthly_salary * ((1 + inflation / 100) ** year)
+    sip = sip_percent / 100 * adj_salary
+    emergency = emergency_percent / 100 * adj_salary
+    surplus = adj_salary - expenses - sip - emergency
 
+    # EMI
     if principal > 0:
-        emi = npf.pmt(monthly_interest, months - i + 1, -principal)
-        emi = min(emi, max_emi)  # Clamp EMI to max EMI based on income
+        emi = npf.pmt(monthly_interest, months - month + 1, -principal)
         interest_paid = principal * monthly_interest
         principal_paid = emi - interest_paid
-        principal -= principal_paid
+    else:
+        emi = 0
+        interest_paid = 0
+        principal_paid = 0
 
-    budget_left = adjusted_salary - expenses - sip - emi
+    surplus -= emi
     prepayment = 0
-    if budget_left > 5000 and principal > 0:
-        prepayment = 0.8 * budget_left
-        prepayment_total += prepayment
-        principal -= prepayment
+    reinvested = 0
 
+    if surplus > 5000:
+        if surplus_strategy == "Prepay Loan":
+            prepayment = 0.8 * surplus
+            principal -= prepayment
+            prepayment_total += prepayment
+        else:
+            reinvested = 0.8 * surplus
+
+        emergency_fund += 0.2 * surplus
+
+    # Update principal
+    principal -= principal_paid
     principal = max(principal, 0)
 
     data.append({
-        "Month": i,
-        "Adjusted Salary": round(adjusted_salary),
+        "Month": month,
+        "Adjusted Salary": round(adj_salary),
+        "Expenses": round(expenses),
         "SIP": round(sip),
+        "Emergency Fund": round(emergency_fund),
+        "Surplus": round(surplus),
+        "Reinvested" if surplus_strategy == "Reinvest Surplus" else "Prepayment": round(reinvested if surplus_strategy == "Reinvest Surplus" else prepayment),
         "EMI": round(emi),
         "Interest Paid": round(interest_paid),
         "Principal Paid": round(principal_paid),
-        "Prepayment": round(prepayment),
         "Remaining Principal": round(principal)
     })
 
     if principal <= 0:
         break
 
+# DataFrame
 df = pd.DataFrame(data)
 
-# Output section
+# Layout
 st.subheader("📊 Loan Amortization Schedule")
 st.dataframe(df, use_container_width=True)
 
-st.subheader("📈 Summary Stats")
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Interest Paid", f"₹{df['Interest Paid'].sum():,.0f}")
-col2.metric("Total Prepayments", f"₹{prepayment_total:,.0f}")
-col3.metric("Loan Closed In", f"{len(df)} months")
+# Summary
+st.subheader("📈 Summary")
+c1, c2, c3 = st.columns(3)
+c1.metric("Total Interest Paid", f"₹{df['Interest Paid'].sum():,.0f}")
+c2.metric("Total Prepayments" if surplus_strategy == "Prepay Loan" else "Total Reinvested", f"₹{df.iloc[-1]['Prepayment' if surplus_strategy == 'Prepay Loan' else 'Reinvested']:,.0f}")
+c3.metric("Loan Closed In", f"{len(df)} months")
 
-st.subheader("📉 Trends Over Time")
-st.line_chart(df[["EMI", "Interest Paid", "Prepayment"]])
+# Visuals
+st.subheader("📉 Trend Charts")
+st.line_chart(df[["EMI", "Interest Paid", "Principal Paid"]])
+st.area_chart(df[["Emergency Fund"]])
+if surplus_strategy == "Prepay Loan":
+    st.line_chart(df[["Prepayment"]])
+else:
+    st.line_chart(df[["Reinvested"]])
 
-# File download
-csv = df.to_csv(index=False)
-excel = io.BytesIO()
-with pd.ExcelWriter(excel, engine='xlsxwriter') as writer:
-    df.to_excel(writer, index=False, sheet_name='Schedule')
-excel.seek(0)
-
-st.subheader("📥 Download")
+# Downloads
+st.subheader("📥 Download Schedule")
+csv = df.to_csv(index=False).encode()
 st.download_button("Download CSV", csv, "loan_schedule.csv", "text/csv")
-st.download_button("Download Excel", excel.read(), "loan_schedule.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
